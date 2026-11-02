@@ -248,7 +248,7 @@ function DataSection() {
           <h3 className="text-sm font-semibold">Export everything</h3>
           <p className="mt-1 text-xs text-ink-3">A complete JSON file of your profile, consents, categories, transactions, budgets and security log.</p>
           <Button className="mt-3" variant="secondary" size="sm" icon={<Download className="size-4" />} loading={exporting}
-            onClick={async () => { setExporting(true); try { await downloadFile("/me/export", "finpilot-export.json"); } finally { setExporting(false); } }}>
+            onClick={async () => { setExporting(true); await downloadFile("/me/export", "finpilot-export.json"); setExporting(false); }}>
             Download my data
           </Button>
         </div>

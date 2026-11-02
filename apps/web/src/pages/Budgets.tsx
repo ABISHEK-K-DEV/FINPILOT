@@ -24,6 +24,7 @@ const STATUS: Record<BudgetStatus, { label: string; tone: "success" | "warning" 
 export default function BudgetsPage() {
   const { month, setMonth, currentMonth } = useMonthParam();
   const [editing, setEditing] = useState<BudgetWithProgressDTO | "new" | null>(null);
+  const { categories } = useCategories();
   const q = useQuery({
     queryKey: qk.budgets(month),
     queryFn: () => api.get<{ month: string; currency: string; items: BudgetWithProgressDTO[] }>(`/budgets${qs({ month })}`),
@@ -36,7 +37,14 @@ export default function BudgetsPage() {
         description="Monthly limits that repeat every month. Progress is calculated from your recorded expenses."
         actions={<>
           <MonthSwitcher month={month} onChange={setMonth} maxMonth={currentMonth} />
-          <Button icon={<Plus className="size-4" />} onClick={() => setEditing("new")}>New budget</Button>
+          <Button
+            icon={<Plus className="size-4" />}
+            onClick={() => setEditing("new")}
+            disabled={!q.data || !hasAvailableScope(q.data.items, categories)}
+            title={q.data && !hasAvailableScope(q.data.items, categories) ? "Every expense category already has a budget" : undefined}
+          >
+            New budget
+          </Button>
         </>}
       />
       {q.isPending ? (
@@ -202,4 +210,10 @@ function BudgetModal({ budget, existing, onClose }: { budget: BudgetWithProgress
       </form>
     </Modal>
   );
+}
+
+/** True while at least one scope (overall or an expense category) has no budget yet. */
+function hasAvailableScope(existing: BudgetWithProgressDTO[], categories: { id: string; kind: string }[]): boolean {
+  const taken = new Set(existing.map((b) => b.categoryId ?? "OVERALL"));
+  return !taken.has("OVERALL") || categories.some((c) => c.kind === "EXPENSE" && !taken.has(c.id));
 }

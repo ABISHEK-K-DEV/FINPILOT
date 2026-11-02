@@ -28,7 +28,7 @@ bills, subscriptions, warranties and recurring commitments.
 
 ## Run locally
 
-**Prerequisites:** Node.js ≥ 20.19 (22 recommended), PostgreSQL 16 (or Docker).
+**Prerequisites:** Node.js ≥ 22.9, PostgreSQL 16 (or Docker).
 
 1. Install dependencies:
 

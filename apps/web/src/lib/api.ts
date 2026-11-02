@@ -53,10 +53,23 @@ export const api = {
   delete: <T = void>(path: string, body?: unknown) => request<T>("DELETE", path, body),
 };
 
-/** Download a file from an authenticated endpoint (CSV / JSON export). */
-export async function downloadFile(path: string, fallbackName: string): Promise<void> {
-  const res = await fetch(`${BASE}${path}`, { credentials: "same-origin" });
-  if (!res.ok) throw new ApiError(res.status, "DOWNLOAD_FAILED", "Download failed. Please try again.");
+/**
+ * Download a file from an authenticated endpoint (CSV / JSON export).
+ * Never throws: failures are reported to the user and resolve to false.
+ */
+export async function downloadFile(path: string, fallbackName: string): Promise<boolean> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, { credentials: "same-origin" });
+  } catch {
+    window.alert("Can't reach FinPilot. Check your connection and try again.");
+    return false;
+  }
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as ApiErrorBody | null;
+    window.alert(body?.error?.message ?? "Download failed. Please try again.");
+    return false;
+  }
   const blob = await res.blob();
   const name = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ?? fallbackName;
   const url = URL.createObjectURL(blob);
@@ -65,6 +78,7 @@ export async function downloadFile(path: string, fallbackName: string): Promise<
   a.download = name;
   a.click();
   URL.revokeObjectURL(url);
+  return true;
 }
 
 export function qs(params: Record<string, string | number | undefined | null>): string {

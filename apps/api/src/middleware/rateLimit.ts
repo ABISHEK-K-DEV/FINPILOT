@@ -21,5 +21,8 @@ export const apiLimiter = rateLimit({ ...common, windowMs: 60_000, limit: 300 })
 /** Strict limiter for credential endpoints (brute-force protection, complements account lockout). */
 export const authLimiter = rateLimit({ ...common, windowMs: 15 * 60_000, limit: 20 });
 
-/** Expensive endpoints such as data export. */
-export const heavyLimiter = rateLimit({ ...common, windowMs: 60 * 60_000, limit: 10 });
+/** Full data export (expensive). */
+export const exportLimiter = rateLimit({ ...common, windowMs: 60 * 60_000, limit: 10 });
+
+/** Password-confirmed destructive actions (account deletion): limits password guessing. */
+export const sensitiveActionLimiter = rateLimit({ ...common, windowMs: 60 * 60_000, limit: 10 });

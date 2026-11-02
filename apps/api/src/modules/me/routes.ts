@@ -16,7 +16,7 @@ import { decryptNullable, sha256Hex } from "../../lib/crypto.js";
 import { audit } from "../../lib/audit.js";
 import { AppError } from "../../lib/errors.js";
 import { authOf } from "../../middleware/auth.js";
-import { heavyLimiter } from "../../middleware/rateLimit.js";
+import { exportLimiter, sensitiveActionLimiter } from "../../middleware/rateLimit.js";
 import { loadSampleData, removeSampleData } from "../../services/sampleData.js";
 import { toUserDTO } from "../mappers.js";
 
@@ -83,7 +83,7 @@ meRouter.get("/activity", async (req, res) => {
 });
 
 /** Full machine-readable export of everything FinPilot stores about the user (data portability). */
-meRouter.get("/export", heavyLimiter, async (req, res) => {
+meRouter.get("/export", exportLimiter, async (req, res) => {
   const { userId } = authOf(req);
   const [user, consents, categories, accounts, transactions, budgets, auditLogs] = await Promise.all([
     prisma.user.findUniqueOrThrow({ where: { id: userId }, include: { preferences: true } }),
@@ -144,7 +144,7 @@ meRouter.get("/export", heavyLimiter, async (req, res) => {
 });
 
 /** Permanent account deletion. All user-owned rows cascade; the audit trail keeps only an anonymous marker. */
-meRouter.delete("/", heavyLimiter, async (req, res) => {
+meRouter.delete("/", sensitiveActionLimiter, async (req, res) => {
   const { userId } = authOf(req);
   const input = parse(deleteAccountSchema, req.body);
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });

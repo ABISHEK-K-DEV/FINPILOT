@@ -88,7 +88,7 @@ export function ProgressBar({ percent, status, label }: { percent: number; statu
   const width = Math.min(100, Math.max(0, percent));
   const color = status === "EXCEEDED" ? "bg-danger" : status === "WARNING" ? "bg-warning" : "bg-accent";
   return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-canvas ring-1 ring-line ring-inset" role="progressbar" aria-valuenow={Math.round(percent)} aria-valuemin={0} aria-valuemax={100} aria-label={label}>
+    <div className="h-2 w-full overflow-hidden rounded-full bg-canvas ring-1 ring-line ring-inset" role="progressbar" aria-valuenow={Math.round(percent)} aria-valuemin={0} aria-valuemax={Math.max(100, Math.round(percent))} aria-valuetext={`${percent.toFixed(1)}% used`} aria-label={label}>
       <div className={clsx("h-full rounded-full transition-[width]", color)} style={{ width: `${width}%` }} />
     </div>
   );
