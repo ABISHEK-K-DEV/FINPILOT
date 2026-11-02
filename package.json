@@ -1,0 +1,32 @@
+{
+  "name": "finpilot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FinPilot — privacy-first personal financial intelligence platform",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "build:shared": "npm run build -w @finpilot/shared",
+    "dev": "npm run build:shared && concurrently -k -n api,web -c blue,green \"npm run dev -w @finpilot/api\" \"npm run dev -w @finpilot/web\"",
+    "build": "npm run build:shared && npm run build -w @finpilot/api && npm run build -w @finpilot/web",
+    "typecheck": "npm run build:shared && npm run typecheck --workspaces --if-present",
+    "test": "npm run build:shared && npm run test --workspaces --if-present",
+    "db:migrate": "npm run db:migrate -w @finpilot/api",
+    "db:deploy": "npm run db:deploy -w @finpilot/api",
+    "db:seed": "npm run db:seed -w @finpilot/api",
+    "db:studio": "npm run db:studio -w @finpilot/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "typescript": "~5.9.3"
+  },
+  "overrides": {
+    "deepmerge-ts": "^8.0.0"
+  }
+}

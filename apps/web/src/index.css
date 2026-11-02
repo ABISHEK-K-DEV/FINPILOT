@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+/* FinPilot design tokens — calm neutral surfaces, deep navy ink, one blue accent.
+   Green is reserved for positive savings; orange/red only for meaningful alerts. */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+
+  --color-canvas: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-line: #e4e7ec;
+  --color-line-strong: #cfd4dc;
+
+  --color-ink: #0f1e3d;          /* primary text, deep navy */
+  --color-ink-2: #3d4b66;        /* secondary text */
+  --color-ink-3: #6b7790;        /* muted text */
+
+  --color-accent: #2563eb;
+  --color-accent-strong: #1d4ed8;
+  --color-accent-soft: #eaf1fe;
+
+  --color-positive: #15803d;
+  --color-positive-soft: #e8f6ee;
+  --color-warning: #c2410c;
+  --color-warning-soft: #fff3e8;
+  --color-danger: #b91c1c;
+  --color-danger-soft: #fdecec;
+
+  /* chart series (validated: scripts/validate_palette.js, light surface) */
+  --color-series-expense: #2563eb;
+  --color-series-income: #0d9488;
+}
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    @apply bg-canvas text-ink antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  :focus-visible { @apply outline-2 outline-offset-2 outline-accent; }
+}
+
+@utility tabular { font-variant-numeric: tabular-nums; }

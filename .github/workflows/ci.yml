@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: finpilot
+          POSTGRES_PASSWORD: finpilot_dev
+          POSTGRES_DB: finpilot_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U finpilot" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://finpilot:finpilot_dev@localhost:5432/finpilot_test
+      TEST_DATABASE_URL: postgresql://finpilot:finpilot_dev@localhost:5432/finpilot_test
+      FIELD_ENCRYPTION_KEY: BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=
+      AUDIT_HASH_SECRET: ci-only-audit-secret-not-used-anywhere-else-0123
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm audit --audit-level=high

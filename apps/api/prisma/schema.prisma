@@ -1,0 +1,824 @@
+// FinPilot database schema (PostgreSQL)
+//
+// Conventions
+//  - Primary keys: UUID v4 (no sequential IDs that leak volume or allow enumeration).
+//  - Money: NUMERIC(19,4) via Prisma Decimal. Never Float. Always paired with an ISO-4217 currency (CHAR(3)).
+//  - Calendar dates the user thinks in (transaction date, due date, renewal date) are DATE columns.
+//    Instants (createdAt, remindAt, sentAt) are TIMESTAMPTZ (stored UTC).
+//  - Every user-owned table carries `userId` with ON DELETE CASCADE so account deletion removes all data,
+//    and an index leading with `userId` so every query is user-scoped and efficient.
+//  - Columns suffixed `Enc` hold AES-256-GCM application-level ciphertext (see src/lib/crypto.ts).
+//  - Additional CHECK constraints (positive amounts, currency format, percentages) live in the SQL migration.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────── Enums ───────────────────────────────
+
+enum UserRole {
+  USER
+  SUPPORT
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum ConsentType {
+  TERMS_OF_SERVICE
+  PRIVACY_POLICY
+  AI_PROCESSING
+  DOCUMENT_PROCESSING
+  EMAIL_REMINDERS
+  PRODUCT_ANALYTICS
+  MARKETING_EMAIL
+}
+
+enum FinancialAccountType {
+  CASH
+  BANK_ACCOUNT
+  CREDIT_CARD
+  UPI
+  DIGITAL_WALLET
+  LOAN
+  OTHER
+}
+
+enum CategoryKind {
+  EXPENSE
+  INCOME
+}
+
+enum TransactionType {
+  EXPENSE
+  INCOME
+  TRANSFER
+}
+
+enum TransactionSource {
+  MANUAL
+  RECEIPT_SCAN
+  IMPORT
+  SAMPLE
+}
+
+enum PaymentMethod {
+  CASH
+  UPI
+  DEBIT_CARD
+  CREDIT_CARD
+  NET_BANKING
+  WALLET
+  BANK_TRANSFER
+  OTHER
+}
+
+enum BudgetPeriod {
+  MONTHLY
+}
+
+enum DocumentType {
+  SHOPPING_RECEIPT
+  ELECTRICITY_BILL
+  INTERNET_BILL
+  MOBILE_BILL
+  INSURANCE_DOCUMENT
+  SUBSCRIPTION_INVOICE
+  PURCHASE_INVOICE
+  OTHER
+}
+
+enum ReceiptStatus {
+  UPLOADED
+  PROCESSING
+  NEEDS_REVIEW
+  CONFIRMED
+  FAILED
+  REJECTED
+}
+
+enum BillType {
+  ELECTRICITY
+  INTERNET
+  MOBILE
+  INSURANCE
+  WATER
+  GAS
+  SUBSCRIPTION
+  PURCHASE
+  OTHER
+}
+
+enum BillStatus {
+  UNPAID
+  PAID
+  OVERDUE
+  DISPUTED
+}
+
+enum RecurrenceFrequency {
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  HALF_YEARLY
+  YEARLY
+}
+
+enum RecurringKind {
+  BILL
+  SUBSCRIPTION
+  EMI
+  INSURANCE
+  RENT
+  OTHER
+}
+
+enum DetectionSource {
+  MANUAL
+  RULE_DETECTED
+  DOCUMENT
+}
+
+enum RecurringStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
+  ENDED
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  PAUSED
+  CANCELLED
+}
+
+enum WarrantyType {
+  MANUFACTURER
+  SELLER
+  EXTENDED
+  OTHER
+}
+
+enum ReminderEntityType {
+  BILL
+  SUBSCRIPTION
+  RECURRING_PAYMENT
+  WARRANTY
+  EMI
+  BUDGET
+  CUSTOM
+}
+
+enum ReminderStatus {
+  SCHEDULED
+  SENT
+  DISMISSED
+  CANCELLED
+  FAILED
+}
+
+enum NotificationChannel {
+  IN_APP
+  PUSH
+  EMAIL
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  READ
+}
+
+enum InsightType {
+  SPENDING_SPIKE
+  DUPLICATE_TRANSACTION
+  UNEXPECTED_RECURRING_CHARGE
+  BILL_INCREASE
+  SUBSCRIPTION_PRICE_INCREASE
+  POSSIBLE_BILLING_ERROR
+  BUDGET_WARNING
+  CATEGORY_TREND
+  SAVINGS_OPPORTUNITY
+}
+
+enum InsightSeverity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum InsightStatus {
+  NEW
+  SEEN
+  DISMISSED
+  CONFIRMED_ISSUE
+  NOT_AN_ISSUE
+}
+
+enum InsightOrigin {
+  RULE
+  RULE_WITH_AI_EXPLANATION
+}
+
+enum AIMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+  TOOL
+}
+
+enum PlanCode {
+  FREE
+  PREMIUM
+  BUSINESS
+}
+
+// ─────────────────────────── Identity & access ───────────────────────────
+
+model User {
+  id               String     @id @default(uuid()) @db.Uuid
+  email            String     @unique @db.VarChar(254) // stored lower-cased
+  passwordHash     String     @db.VarChar(255) // argon2id; never store plaintext
+  name             String     @db.VarChar(80)
+  role             UserRole   @default(USER)
+  status           UserStatus @default(ACTIVE)
+  emailVerifiedAt  DateTime?  @db.Timestamptz(3)
+  planCode         PlanCode   @default(FREE)
+  failedLoginCount Int        @default(0)
+  lockedUntil      DateTime?  @db.Timestamptz(3)
+  lastLoginAt      DateTime?  @db.Timestamptz(3)
+  createdAt        DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime   @updatedAt @db.Timestamptz(3)
+
+  plan               SubscriptionPlan    @relation(fields: [planCode], references: [code])
+  preferences        UserPreferences?
+  sessions           Session[]
+  consents           ConsentRecord[]
+  financialAccounts  FinancialAccount[]
+  transactions       Transaction[]
+  categories         ExpenseCategory[]
+  budgets            Budget[]
+  receipts           Receipt[]
+  bills              Bill[]
+  subscriptions      Subscription[]
+  recurringPayments  RecurringPayment[]
+  purchasedProducts  PurchasedProduct[]
+  warranties         Warranty[]
+  paymentReminders   PaymentReminder[]
+  insights           FinancialInsight[]
+  notifications      Notification[]
+  aiConversations    AIConversation[]
+  auditLogs          AuditLog[]
+
+  @@index([planCode])
+  @@map("users")
+}
+
+model UserPreferences {
+  userId               String   @id @db.Uuid
+  baseCurrency         String   @default("INR") @db.Char(3)
+  locale               String   @default("en-IN") @db.VarChar(16)
+  timezone             String   @default("Asia/Kolkata") @db.VarChar(64)
+  budgetWarningPercent Int      @default(80) @db.SmallInt
+  weekStartsOn         Int      @default(1) @db.SmallInt // 0 = Sunday
+  emailNotifications   Boolean  @default(false)
+  pushNotifications    Boolean  @default(false)
+  updatedAt            DateTime @updatedAt @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
+}
+
+/// Opaque session tokens. Only the SHA-256 hash of the token is stored.
+model Session {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  tokenHash  String    @unique @db.Char(64)
+  userAgent  String?   @db.VarChar(255)
+  ipHash     String?   @db.Char(64)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  lastUsedAt DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt  DateTime  @db.Timestamptz(3)
+  revokedAt  DateTime? @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("sessions")
+}
+
+/// Append-only consent history. The latest record per (userId, type) is the effective state.
+model ConsentRecord {
+  id        String      @id @default(uuid()) @db.Uuid
+  userId    String      @db.Uuid
+  type      ConsentType
+  granted   Boolean
+  version   String?     @db.VarChar(32)
+  createdAt DateTime    @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type, createdAt(sort: Desc)])
+  @@map("consent_records")
+}
+
+// ─────────────────────────── Money movement ───────────────────────────
+
+/// A user-described account (cash, a card, a UPI handle). Holds NO credentials, no full account numbers.
+model FinancialAccount {
+  id               String               @id @default(uuid()) @db.Uuid
+  userId           String               @db.Uuid
+  name             String               @db.VarChar(80)
+  type             FinancialAccountType
+  currency         String               @db.Char(3)
+  institutionName  String?              @db.VarChar(120)
+  maskedIdentifier String?              @db.VarChar(8) // e.g. last 4 digits only
+  isArchived       Boolean              @default(false)
+  createdAt        DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime             @updatedAt @db.Timestamptz(3)
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@index([userId])
+  @@map("financial_accounts")
+}
+
+/// System categories have userId = NULL and isSystem = true. Custom categories belong to one user.
+model ExpenseCategory {
+  id         String       @id @default(uuid()) @db.Uuid
+  userId     String?      @db.Uuid
+  slug       String       @db.VarChar(48)
+  name       String       @db.VarChar(40)
+  kind       CategoryKind
+  icon       String       @default("circle") @db.VarChar(32)
+  color      String       @default("#64748B") @db.Char(7)
+  isSystem   Boolean      @default(false)
+  archivedAt DateTime?    @db.Timestamptz(3)
+  createdAt  DateTime     @default(now()) @db.Timestamptz(3)
+
+  user              User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions      Transaction[]
+  budgets           Budget[]
+  recurringPayments RecurringPayment[]
+  subscriptions     Subscription[]
+
+  @@unique([userId, slug])
+  @@index([userId, kind])
+  @@map("expense_categories")
+}
+
+model Transaction {
+  id                 String            @id @default(uuid()) @db.Uuid
+  userId             String            @db.Uuid
+  accountId          String?           @db.Uuid
+  categoryId         String?           @db.Uuid
+  type               TransactionType
+  amount             Decimal           @db.Decimal(19, 4) // always > 0; direction comes from `type`
+  currency           String            @db.Char(3)
+  transactionDate    DateTime          @db.Date
+  merchant           String?           @db.VarChar(120)
+  description        String?           @db.VarChar(500)
+  notesEnc           String?           @db.Text // encrypted free-text notes
+  paymentMethod      PaymentMethod?
+  tags               String[]          @default([])
+  source             TransactionSource @default(MANUAL)
+  isSample           Boolean           @default(false)
+  receiptId          String?           @db.Uuid
+  recurringPaymentId String?           @db.Uuid
+  createdAt          DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime          @updatedAt @db.Timestamptz(3)
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account          FinancialAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  category         ExpenseCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  receipt          Receipt?          @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  recurringPayment RecurringPayment? @relation(fields: [recurringPaymentId], references: [id], onDelete: SetNull)
+  bill             Bill?
+
+  @@index([userId, transactionDate(sort: Desc)])
+  @@index([userId, categoryId, transactionDate])
+  @@index([userId, type, transactionDate])
+  @@index([userId, isSample])
+  @@index([userId, merchant])
+  @@map("transactions")
+}
+
+model Budget {
+  id                    String       @id @default(uuid()) @db.Uuid
+  userId                String       @db.Uuid
+  categoryId            String?      @db.Uuid // NULL = overall budget across all expenses
+  /// Category id or the literal "OVERALL"; lets us enforce one budget per scope with a plain unique index.
+  scopeKey              String       @db.VarChar(40)
+  period                BudgetPeriod @default(MONTHLY)
+  amount                Decimal      @db.Decimal(19, 4)
+  currency              String       @db.Char(3)
+  alertThresholdPercent Int          @default(80) @db.SmallInt
+  isSample              Boolean      @default(false)
+  createdAt             DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime     @updatedAt @db.Timestamptz(3)
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category ExpenseCategory? @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scopeKey, period])
+  @@map("budgets")
+}
+
+// ─────────────────────────── Documents & bills (Milestone 2) ───────────────────────────
+
+/// An uploaded document. The file itself lives in private object storage; only its key is stored here.
+model Receipt {
+  id                  String        @id @default(uuid()) @db.Uuid
+  userId              String        @db.Uuid
+  documentType        DocumentType  @default(OTHER)
+  status              ReceiptStatus @default(UPLOADED)
+  storageKey          String        @unique @db.VarChar(255) // random, non-guessable object key
+  originalFilenameEnc String?       @db.Text
+  mimeType            String        @db.VarChar(100)
+  sizeBytes           Int
+  sha256              String        @db.Char(64)
+  ocrProvider         String?       @db.VarChar(40)
+  extractionModel     String?       @db.VarChar(80)
+  extractedData       Json? // raw structured extraction, pending user review
+  extractionConfidence Decimal?     @db.Decimal(5, 4)
+  failureReason       String?       @db.VarChar(255)
+  reviewedAt          DateTime?     @db.Timestamptz(3)
+  createdAt           DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime      @updatedAt @db.Timestamptz(3)
+
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions      Transaction[]
+  bill              Bill?
+  purchasedProducts PurchasedProduct[]
+  warranties        Warranty[]
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, sha256])
+  @@map("receipts")
+}
+
+model Bill {
+  id                 String         @id @default(uuid()) @db.Uuid
+  userId             String         @db.Uuid
+  receiptId          String?        @unique @db.Uuid
+  transactionId      String?        @unique @db.Uuid
+  recurringPaymentId String?        @db.Uuid
+  billerName         String         @db.VarChar(120)
+  billType           BillType
+  accountReference   String?        @db.VarChar(40) // masked consumer/account number
+  billNumber         String?        @db.VarChar(80)
+  issueDate          DateTime?      @db.Date
+  dueDate            DateTime?      @db.Date
+  periodStart        DateTime?      @db.Date
+  periodEnd          DateTime?      @db.Date
+  subtotal           Decimal?       @db.Decimal(19, 4)
+  taxAmount          Decimal?       @db.Decimal(19, 4)
+  feesAmount         Decimal?       @db.Decimal(19, 4)
+  totalAmount        Decimal        @db.Decimal(19, 4)
+  currency           String         @db.Char(3)
+  usageQuantity      Decimal?       @db.Decimal(14, 3) // e.g. kWh, GB
+  usageUnit          String?        @db.VarChar(16)
+  status             BillStatus     @default(UNPAID)
+  paymentMethod      PaymentMethod?
+  paidOn             DateTime?      @db.Date
+  createdAt          DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime       @updatedAt @db.Timestamptz(3)
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  receipt          Receipt?          @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  transaction      Transaction?      @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  recurringPayment RecurringPayment? @relation(fields: [recurringPaymentId], references: [id], onDelete: SetNull)
+  lineItems        BillLineItem[]
+  reminders        PaymentReminder[]
+
+  @@index([userId, dueDate])
+  @@index([userId, billType, issueDate])
+  @@map("bills")
+}
+
+model BillLineItem {
+  id          String   @id @default(uuid()) @db.Uuid
+  billId      String   @db.Uuid
+  description String   @db.VarChar(255)
+  quantity    Decimal? @db.Decimal(14, 3)
+  unitPrice   Decimal? @db.Decimal(19, 4)
+  amount      Decimal  @db.Decimal(19, 4)
+  taxRate     Decimal? @db.Decimal(6, 3) // percent
+  taxAmount   Decimal? @db.Decimal(19, 4)
+  sortOrder   Int      @default(0) @db.SmallInt
+
+  bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@index([billId, sortOrder])
+  @@map("bill_line_items")
+}
+
+// ─────────────────────────── Recurring & subscriptions (Milestone 3) ───────────────────────────
+
+model RecurringPayment {
+  id                  String              @id @default(uuid()) @db.Uuid
+  userId              String              @db.Uuid
+  categoryId          String?             @db.Uuid
+  name                String              @db.VarChar(120)
+  merchant            String?             @db.VarChar(120)
+  kind                RecurringKind
+  amount              Decimal             @db.Decimal(19, 4)
+  currency            String              @db.Char(3)
+  frequency           RecurrenceFrequency
+  intervalCount       Int                 @default(1) @db.SmallInt
+  startDate           DateTime            @db.Date
+  endDate             DateTime?           @db.Date
+  nextDueDate         DateTime?           @db.Date
+  lastPaidDate        DateTime?           @db.Date
+  userReportedAutopay Boolean             @default(false)
+  detectionSource     DetectionSource     @default(MANUAL)
+  detectionConfidence Decimal?            @db.Decimal(5, 4)
+  status              RecurringStatus     @default(ACTIVE)
+  createdAt           DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime            @updatedAt @db.Timestamptz(3)
+
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category     ExpenseCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  transactions Transaction[]
+  bills        Bill[]
+  subscription Subscription?
+  reminders    PaymentReminder[]
+
+  @@index([userId, status, nextDueDate])
+  @@map("recurring_payments")
+}
+
+/// A third-party subscription the USER pays for (Netflix, gym…). Not to be confused with SubscriptionPlan (FinPilot's own plans).
+model Subscription {
+  id                   String              @id @default(uuid()) @db.Uuid
+  userId               String              @db.Uuid
+  recurringPaymentId   String?             @unique @db.Uuid
+  categoryId           String?             @db.Uuid
+  serviceName          String              @db.VarChar(120)
+  providerKey          String?             @db.VarChar(64) // links to a curated provider catalogue (cancellation links)
+  planName             String?             @db.VarChar(120)
+  amount               Decimal             @db.Decimal(19, 4)
+  currency             String              @db.Char(3)
+  billingCycle         RecurrenceFrequency
+  startedOn            DateTime?           @db.Date
+  nextRenewalDate      DateTime?           @db.Date
+  trialEndsOn          DateTime?           @db.Date
+  status               SubscriptionStatus  @default(ACTIVE)
+  cancellationUrl      String?             @db.VarChar(500)
+  cancellationGuidance String?             @db.Text
+  cancelledOn          DateTime?           @db.Date
+  createdAt            DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime            @updatedAt @db.Timestamptz(3)
+
+  user             User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recurringPayment RecurringPayment?        @relation(fields: [recurringPaymentId], references: [id], onDelete: SetNull)
+  category         ExpenseCategory?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  priceChanges     SubscriptionPriceChange[]
+  reminders        PaymentReminder[]
+
+  @@index([userId, status, nextRenewalDate])
+  @@map("subscriptions")
+}
+
+model SubscriptionPriceChange {
+  id             String   @id @default(uuid()) @db.Uuid
+  subscriptionId String   @db.Uuid
+  previousAmount Decimal  @db.Decimal(19, 4)
+  newAmount      Decimal  @db.Decimal(19, 4)
+  currency       String   @db.Char(3)
+  effectiveOn    DateTime @db.Date
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, effectiveOn])
+  @@map("subscription_price_changes")
+}
+
+// ─────────────────────────── Purchases & warranties (Milestone 3) ───────────────────────────
+
+model PurchasedProduct {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @db.Uuid
+  receiptId        String?   @db.Uuid
+  transactionId    String?   @db.Uuid
+  name             String    @db.VarChar(160)
+  brand            String?   @db.VarChar(80)
+  model            String?   @db.VarChar(80)
+  productCategory  String    @default("other") @db.VarChar(40) // electronics, appliances, furniture…
+  serialNumberEnc  String?   @db.Text
+  purchaseDate     DateTime  @db.Date
+  purchasePrice    Decimal   @db.Decimal(19, 4)
+  currency         String    @db.Char(3)
+  sellerName       String?   @db.VarChar(120)
+  sellerContact    String?   @db.VarChar(160)
+  invoiceReference String?   @db.VarChar(80)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(3)
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  receipt    Receipt?   @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  warranties Warranty[]
+
+  @@index([userId, purchaseDate])
+  @@map("purchased_products")
+}
+
+model Warranty {
+  id                    String       @id @default(uuid()) @db.Uuid
+  userId                String       @db.Uuid
+  productId             String       @db.Uuid
+  documentReceiptId     String?      @db.Uuid
+  type                  WarrantyType @default(MANUFACTURER)
+  provider              String?      @db.VarChar(120)
+  startDate             DateTime     @db.Date
+  durationMonths        Int          @db.SmallInt
+  expiryDate            DateTime     @db.Date
+  terms                 String?      @db.Text
+  claimContact          String?      @db.VarChar(160)
+  serviceIntervalMonths Int?         @db.SmallInt
+  nextServiceDate       DateTime?    @db.Date
+  createdAt             DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime     @updatedAt @db.Timestamptz(3)
+
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product   PurchasedProduct  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  document  Receipt?          @relation(fields: [documentReceiptId], references: [id], onDelete: SetNull)
+  reminders PaymentReminder[]
+
+  @@index([userId, expiryDate])
+  @@map("warranties")
+}
+
+// ─────────────────────────── Reminders, insights, notifications ───────────────────────────
+
+model PaymentReminder {
+  id                 String                @id @default(uuid()) @db.Uuid
+  userId             String                @db.Uuid
+  entityType         ReminderEntityType
+  billId             String?               @db.Uuid
+  subscriptionId     String?               @db.Uuid
+  recurringPaymentId String?               @db.Uuid
+  warrantyId         String?               @db.Uuid
+  title              String                @db.VarChar(160)
+  note               String?               @db.VarChar(500)
+  amount             Decimal?              @db.Decimal(19, 4)
+  currency           String?               @db.Char(3)
+  dueDate            DateTime              @db.Date
+  remindAt           DateTime              @db.Timestamptz(3)
+  channels           NotificationChannel[] @default([IN_APP])
+  status             ReminderStatus        @default(SCHEDULED)
+  sentAt             DateTime?             @db.Timestamptz(3)
+  createdAt          DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime              @updatedAt @db.Timestamptz(3)
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bill             Bill?             @relation(fields: [billId], references: [id], onDelete: Cascade)
+  subscription     Subscription?     @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  recurringPayment RecurringPayment? @relation(fields: [recurringPaymentId], references: [id], onDelete: Cascade)
+  warranty         Warranty?         @relation(fields: [warrantyId], references: [id], onDelete: Cascade)
+  notifications    Notification[]
+
+  @@index([status, remindAt]) // worker scan
+  @@index([userId, dueDate])
+  @@map("payment_reminders")
+}
+
+/// Explainable insights. Every insight records the rule that produced it and the evidence (record ids + maths).
+model FinancialInsight {
+  id             String          @id @default(uuid()) @db.Uuid
+  userId         String          @db.Uuid
+  type           InsightType
+  severity       InsightSeverity @default(INFO)
+  status         InsightStatus   @default(NEW)
+  origin         InsightOrigin   @default(RULE)
+  ruleId         String          @db.VarChar(64)
+  ruleVersion    Int             @default(1)
+  title          String          @db.VarChar(160)
+  explanation    String          @db.Text
+  evidence       Json // { transactionIds: [], billIds: [], calculation: {...} }
+  periodStart    DateTime?       @db.Date
+  periodEnd      DateTime?       @db.Date
+  dedupeKey      String          @db.VarChar(128)
+  createdAt      DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime        @updatedAt @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, status, createdAt(sort: Desc)])
+  @@map("financial_insights")
+}
+
+model Notification {
+  id         String              @id @default(uuid()) @db.Uuid
+  userId     String              @db.Uuid
+  reminderId String?             @db.Uuid
+  channel    NotificationChannel
+  status     NotificationStatus  @default(PENDING)
+  title      String              @db.VarChar(160)
+  body       String              @db.VarChar(1000)
+  data       Json?
+  sentAt     DateTime?           @db.Timestamptz(3)
+  readAt     DateTime?           @db.Timestamptz(3)
+  createdAt  DateTime            @default(now()) @db.Timestamptz(3)
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reminder PaymentReminder? @relation(fields: [reminderId], references: [id], onDelete: SetNull)
+
+  @@index([userId, readAt, createdAt(sort: Desc)])
+  @@index([status, channel])
+  @@map("notifications")
+}
+
+// ─────────────────────────── AI assistant (Milestone 4) ───────────────────────────
+
+model AIConversation {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  title     String?  @db.VarChar(160)
+  provider  String   @db.VarChar(40)
+  model     String   @db.VarChar(80)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  user     User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages AIMessage[]
+
+  @@index([userId, updatedAt(sort: Desc)])
+  @@map("ai_conversations")
+}
+
+model AIMessage {
+  id             String        @id @default(uuid()) @db.Uuid
+  conversationId String        @db.Uuid
+  role           AIMessageRole
+  contentEnc     String        @db.Text // encrypted
+  citations      Json? // ids of transactions/bills used for the answer
+  calculation    Json? // deterministic calculations the answer relies on
+  tokensIn       Int?
+  tokensOut      Int?
+  createdAt      DateTime      @default(now()) @db.Timestamptz(3)
+
+  conversation AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("ai_messages")
+}
+
+// ─────────────────────────── Platform ───────────────────────────
+
+/// Security & access log. Never contains financial amounts or document contents.
+/// userId is SET NULL on account deletion so the security trail survives without personal linkage.
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String?  @db.Uuid
+  actorId    String?  @db.Uuid
+  action     String   @db.VarChar(64)
+  entityType String?  @db.VarChar(40)
+  entityId   String?  @db.Uuid
+  ipHash     String?  @db.Char(64)
+  userAgent  String?  @db.VarChar(255)
+  requestId  String?  @db.VarChar(64)
+  metadata   Json?
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([action, createdAt(sort: Desc)])
+  @@map("audit_logs")
+}
+
+/// FinPilot's own product tiers. Configurable data, not code.
+model SubscriptionPlan {
+  code         PlanCode @id
+  name         String   @db.VarChar(40)
+  description  String   @db.VarChar(255)
+  priceMonthly Decimal  @db.Decimal(19, 4)
+  priceYearly  Decimal  @db.Decimal(19, 4)
+  currency     String   @db.Char(3)
+  features     Json // string[]
+  limits       Json // { receiptScansPerMonth: 10, aiQuestionsPerMonth: 0, ... } null = unlimited
+  isActive     Boolean  @default(true)
+  sortOrder    Int      @default(0) @db.SmallInt
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  users User[]
+
+  @@map("subscription_plans")
+}
